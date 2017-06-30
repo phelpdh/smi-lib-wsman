@@ -3,12 +3,18 @@
  */
 package com.dell.isg.smi.wsman;
 
+import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.FIFTEEN_SEC;
+import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.FOUR_MIN;
+import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.TEN_SEC;
+import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.TWENTY_SEC;
+
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.xml.namespace.QName;
 import javax.xml.soap.SOAPElement;
@@ -18,41 +24,26 @@ import javax.xml.xpath.XPathExpressionException;
 import javax.xml.xpath.XPathFactory;
 
 import org.apache.commons.lang3.StringUtils;
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONML;
-import org.json.JSONObject;
 import org.slf4j.Logger;
-
-import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.FIFTEEN_SEC;
-import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.TWENTY_SEC;
-import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.FOUR_MIN;
-import static com.dell.isg.smi.commons.utilities.constants.CommonConstants.TEN_SEC;
-
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-import com.dell.isg.smi.wsmanclient.util.Trigger;
-import com.fasterxml.jackson.core.JsonParser;
-
-import springfox.documentation.spring.web.json.Json;
-
-import com.dell.isg.smi.commons.elm.exception.RuntimeCoreException;
+import com.dell.isg.smi.commons.utilities.datetime.DateTimeUtils;
 import com.dell.isg.smi.wsman.command.DeleteJobCmd;
 import com.dell.isg.smi.wsman.command.EnumerateCSIRCmd;
 import com.dell.isg.smi.wsman.command.EnumerateJobs;
 import com.dell.isg.smi.wsman.command.EnumerateSoftwareIdentityCmd;
 import com.dell.isg.smi.wsman.command.GetRSStatusCmd;
-import com.dell.isg.smi.wsman.command.GetRemoteServicesAPIStatus;
-import com.dell.isg.smi.wsman.command.PersonalNamespaceContext;
 import com.dell.isg.smi.wsman.command.GetRSStatusCmd.RSStatusEnum;
+import com.dell.isg.smi.wsman.command.GetRemoteServicesAPIStatus;
 import com.dell.isg.smi.wsman.command.GetRemoteServicesAPIStatus.RSAPIStatusEnum;
 import com.dell.isg.smi.wsman.command.entity.DCIMSoftwareIdentityType;
 import com.dell.isg.smi.wsman.command.entity.InstanceCSIR;
 import com.dell.isg.smi.wsman.entity.LifeCycleJob;
+import com.dell.isg.smi.wsmanclient.util.Trigger;
 
 /**
  *
@@ -65,6 +56,8 @@ public class WSManUtilities {
     private static final Logger logger = LoggerFactory.getLogger(WSManUtilities.class);
 
     private static final String iDRAC_COMPONENT_ID_12G = "25227";
+    private static final Pattern WSMAN_DATE_PATTERN = Pattern.compile("^[0-9]{14}\\.[0-9]{6}\\+[0-9]{3}");
+    private static final String WSMAN_DATE_FORMAT = "yyyyMMddHHmmss";
 
     // List of LC return codes with related messages containing "existing job is completed or is cancelled"
     public static List<String> existingJobCompleteOrCancelErrorCodes = new ArrayList<String>();
@@ -395,41 +388,79 @@ public class WSManUtilities {
     }
 
 
-	/**
-	 * @param nodeList - the dom node list to be processed
-	 * @param jNodes - the list to be populated with results
-	 */
-	private static void processNodeList(NodeList nodeList, List<Object> jNodes) {
+    /**
+     * @param nodeList - the dom node list to be processed
+     * @param jNodes - the list to be populated with results
+     */
+    private static void processNodeList(NodeList nodeList, List<Object> jNodes) {
         Map<String, Object> nodeMap = new HashMap<String, Object>();
         
         for (int i = 0; i < nodeList.getLength(); i++) {
             Node node = nodeList.item(i);
             if (node.getNodeType() == Element.ELEMENT_NODE) {
                 if (node.hasChildNodes() && node.getChildNodes().item(0).getNodeType() == Element.ELEMENT_NODE) {
-                	processNodeList(node.getChildNodes(), jNodes);
+                    processNodeList(node.getChildNodes(), jNodes);
                 } else {
-	        		String key = node.getLocalName();
-	        		String content = node.getTextContent();
-	        		if (nodeMap.containsKey(key) == false) {
-	                    nodeMap.put(key, content);
-	                } else {
-	                	Object o = nodeMap.get(key);
-	                	if(o instanceof String){
-	                		List<String> valueList = new LinkedList<String>();
-	                		valueList.add(o.toString());
-	                		valueList.add(content);
-	                		nodeMap.put(key, valueList);
-	                	} else {
-	                		List<String> list = (List<String>) nodeMap.get(key);
-	                		list.add(content);
-	                	}
-	                }
+                    String key = node.getLocalName();
+                    String content = node.getTextContent();
+                    if(isDate(content, WSMAN_DATE_PATTERN)) {
+                        content = getDateString(content, WSMAN_DATE_FORMAT);
+                    }
+                    if (nodeMap.containsKey(key) == false) {
+                        nodeMap.put(key, StringUtils.isNumeric(content) ? Long.parseLong(content) : content);
+                    } else {
+                        Object o = nodeMap.get(key);
+                        if(!(o instanceof List)) {
+                            List<Object> valueList = new LinkedList<>();
+                            valueList.add(o);
+                            valueList.add(StringUtils.isNumeric(content) ? Long.parseLong(content) : content);
+                            nodeMap.put(key, valueList);
+                        } else {
+                            List<Object> list = (List<Object>) nodeMap.get(key);
+                            list.add(content);
+                        }
+                    }
                 }
             }
         }
         if(!nodeMap.isEmpty()){
-        	jNodes.add(nodeMap);
+            jNodes.add(nodeMap);
         }
-	}
+    }
+
+
+    /**
+     * Matches input string with pattern string.
+     *
+     * @param inputStr the input str
+     * @param patternStr the pattern str
+     * @return bool value
+     */
+    public static boolean isDate(String str, Pattern pattern) {
+        if (str == null) {
+            return false;
+        }
+        Matcher matcher = pattern.matcher(str);
+        if (matcher.matches()) {
+            return true;
+        }
+        return false;
+    }
+
+
+    /**
+     * @param dateString
+     * @param dateFormat
+     * @return
+     */
+    private static String getDateString(String dateString, String dateFormat) {
+        try{
+            return DateTimeUtils.getUtcDateFromString(dateFormat, dateString).toString();
+        }
+        catch(Exception e)
+        {
+            return dateString;
+        }
+    }
     
 }
